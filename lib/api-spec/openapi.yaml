@@ -3,20 +3,28 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: $MAGIC Bot Dashboard API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: bot
+    description: Bot control operations
+  - name: wallets
+    description: Wallet management
+  - name: transactions
+    description: Transaction log
+  - name: stats
+    description: Stats and analytics
+
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,13 +32,358 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /bot/status:
+    get:
+      operationId: getBotStatus
+      tags: [bot]
+      summary: Get bot running status and config
+      responses:
+        "200":
+          description: Bot status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotStatus"
+
+  /bot/start:
+    post:
+      operationId: startBot
+      tags: [bot]
+      summary: Start the bot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BotConfigInput"
+      responses:
+        "200":
+          description: Bot started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotStatus"
+
+  /bot/stop:
+    post:
+      operationId: stopBot
+      tags: [bot]
+      summary: Stop the bot
+      responses:
+        "200":
+          description: Bot stopped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotStatus"
+
+  /bot/config:
+    get:
+      operationId: getBotConfig
+      tags: [bot]
+      summary: Get current bot configuration
+      responses:
+        "200":
+          description: Bot config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotConfig"
+    patch:
+      operationId: updateBotConfig
+      tags: [bot]
+      summary: Update bot configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BotConfigInput"
+      responses:
+        "200":
+          description: Updated config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotConfig"
+
+  /bot/logs:
+    get:
+      operationId: getBotLogs
+      tags: [bot]
+      summary: Get recent bot log lines
+      responses:
+        "200":
+          description: Log lines
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/LogLine"
+
+  /wallets:
+    get:
+      operationId: listWallets
+      tags: [wallets]
+      summary: List all wallets with status
+      responses:
+        "200":
+          description: Wallet list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Wallet"
+
+  /wallets/active:
+    get:
+      operationId: getActiveWallets
+      tags: [wallets]
+      summary: Get currently active buyers and sellers
+      responses:
+        "200":
+          description: Active wallets summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActiveWallets"
+
+  /transactions:
+    get:
+      operationId: listTransactions
+      tags: [transactions]
+      summary: List transaction history
+      responses:
+        "200":
+          description: Transaction list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Transaction"
+
+  /stats/summary:
+    get:
+      operationId: getStatsSummary
+      tags: [stats]
+      summary: Get overall bot stats summary
+      responses:
+        "200":
+          description: Stats summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatsSummary"
+
+  /stats/market:
+    get:
+      operationId: getMarketStats
+      tags: [stats]
+      summary: Get current market cap and price info
+      responses:
+        "200":
+          description: Market stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketStats"
+
 components:
   schemas:
     HealthStatus:
       type: object
+      required: [status]
       properties:
         status:
           type: string
-      required:
-        - status
 
+    BotStatus:
+      type: object
+      required: [running, startedAt, pid]
+      properties:
+        running:
+          type: boolean
+        startedAt:
+          type: ["string", "null"]
+        pid:
+          type: ["integer", "null"]
+        uptime:
+          type: ["number", "null"]
+        totalActions:
+          type: integer
+
+    BotConfig:
+      type: object
+      required:
+        - tokenMint
+        - totalWallets
+        - activeBuyers
+        - activeSellers
+        - rotateEveryNBuys
+        - targetMc
+        - initialMc
+        - intervalSeconds
+        - sellProbability
+        - slippageBps
+        - rpcUrl
+      properties:
+        tokenMint:
+          type: string
+        rpcUrl:
+          type: string
+        totalWallets:
+          type: integer
+        activeBuyers:
+          type: integer
+        activeSellers:
+          type: integer
+        rotateEveryNBuys:
+          type: integer
+        targetMc:
+          type: number
+        initialMc:
+          type: number
+        intervalSeconds:
+          type: integer
+        sellProbability:
+          type: number
+        slippageBps:
+          type: integer
+
+    BotConfigInput:
+      type: object
+      properties:
+        tokenMint:
+          type: string
+        rpcUrl:
+          type: string
+        totalWallets:
+          type: integer
+        activeBuyers:
+          type: integer
+        activeSellers:
+          type: integer
+        rotateEveryNBuys:
+          type: integer
+        targetMc:
+          type: number
+        initialMc:
+          type: number
+        intervalSeconds:
+          type: integer
+        sellProbability:
+          type: number
+        slippageBps:
+          type: integer
+
+    LogLine:
+      type: object
+      required: [id, timestamp, level, message]
+      properties:
+        id:
+          type: integer
+        timestamp:
+          type: string
+        level:
+          type: string
+        message:
+          type: string
+
+    Wallet:
+      type: object
+      required: [id, publicKey, role, isActive, solBalance, tokenBalance, totalBuys, totalSells, buyCountThisRotation, sellCountThisRotation]
+      properties:
+        id:
+          type: integer
+        publicKey:
+          type: string
+        role:
+          type: string
+        isActive:
+          type: boolean
+        solBalance:
+          type: number
+        tokenBalance:
+          type: number
+        totalBuys:
+          type: integer
+        totalSells:
+          type: integer
+        buyCountThisRotation:
+          type: integer
+        sellCountThisRotation:
+          type: integer
+
+    ActiveWallets:
+      type: object
+      required: [buyers, sellers, inactiveBuyerCount, inactiveSellerCount]
+      properties:
+        buyers:
+          type: array
+          items:
+            type: integer
+        sellers:
+          type: array
+          items:
+            type: integer
+        inactiveBuyerCount:
+          type: integer
+        inactiveSellerCount:
+          type: integer
+
+    Transaction:
+      type: object
+      required: [id, timestamp, walletId, action, amount, marketCap, txSignature]
+      properties:
+        id:
+          type: integer
+        timestamp:
+          type: string
+        walletId:
+          type: integer
+        action:
+          type: string
+        amount:
+          type: number
+        marketCap:
+          type: number
+        txSignature:
+          type: string
+
+    StatsSummary:
+      type: object
+      required: [totalTransactions, totalBuys, totalSells, totalSolSpent, walletsUsed, currentMc, targetMc, uptimeMinutes]
+      properties:
+        totalTransactions:
+          type: integer
+        totalBuys:
+          type: integer
+        totalSells:
+          type: integer
+        totalSolSpent:
+          type: number
+        walletsUsed:
+          type: integer
+        currentMc:
+          type: number
+        targetMc:
+          type: number
+        uptimeMinutes:
+          type: number
+
+    MarketStats:
+      type: object
+      required: [marketCap, solPrice, tokenPrice, timestamp]
+      properties:
+        marketCap:
+          type: number
+        solPrice:
+          type: number
+        tokenPrice:
+          type: number
+        timestamp:
+          type: string

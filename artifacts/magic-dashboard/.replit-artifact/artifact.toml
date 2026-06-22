@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "$MAGIC Bot Dashboard"
+version = "1.0.0"
+id = "artifacts/magic-dashboard"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 18276
+
+[services.development]
+run = "pnpm --filter @workspace/magic-dashboard run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/magic-dashboard", "run", "build" ]
+publicDir = "artifacts/magic-dashboard/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "18276"
+BASE_PATH = "/"
