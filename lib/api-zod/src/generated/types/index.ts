@@ -13,6 +13,7 @@ export * from './botStatus';
 export * from './healthStatus';
 export * from './logLine';
 export * from './marketStats';
+export * from './priceCandle';
 export * from './statsSummary';
 export * from './transaction';
 export * from './wallet';

@@ -192,6 +192,21 @@ paths:
               schema:
                 $ref: "#/components/schemas/MarketStats"
 
+  /stats/chart:
+    get:
+      operationId: getPriceChart
+      tags: [stats]
+      summary: Get OHLCV price history for $MAGIC
+      responses:
+        "200":
+          description: OHLCV candles
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PriceCandle"
+
 components:
   schemas:
     HealthStatus:
@@ -387,3 +402,21 @@ components:
           type: number
         timestamp:
           type: string
+
+    PriceCandle:
+      type: object
+      required: [time, open, high, low, close, volume]
+      properties:
+        time:
+          type: integer
+          description: Unix timestamp (seconds)
+        open:
+          type: number
+        high:
+          type: number
+        low:
+          type: number
+        close:
+          type: number
+        volume:
+          type: number

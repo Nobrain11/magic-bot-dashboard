@@ -103,3 +103,13 @@ export interface MarketStats {
   timestamp: string;
 }
 
+export interface PriceCandle {
+  /** Unix timestamp (seconds) */
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+

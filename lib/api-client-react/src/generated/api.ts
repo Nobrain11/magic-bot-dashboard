@@ -27,6 +27,7 @@ import type {
   HealthStatus,
   LogLine,
   MarketStats,
+  PriceCandle,
   StatsSummary,
   Transaction,
   Wallet
@@ -937,6 +938,83 @@ export function useGetMarketStats<TData = Awaited<ReturnType<typeof getMarketSta
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getGetMarketStatsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getGetPriceChartUrl = () => {
+
+
+
+
+  return `/api/stats/chart`
+}
+
+/**
+ * @summary Get OHLCV price history for $MAGIC
+ */
+export const getPriceChart = async ( options?: RequestInit): Promise<PriceCandle[]> => {
+
+  return customFetch<PriceCandle[]>(getGetPriceChartUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetPriceChartQueryKey = () => {
+    return [
+    `/api/stats/chart`
+    ] as const;
+    }
+
+
+export const getGetPriceChartQueryOptions = <TData = Awaited<ReturnType<typeof getPriceChart>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPriceChart>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetPriceChartQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getPriceChart>>> = ({ signal }) => getPriceChart({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getPriceChart>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetPriceChartQueryResult = NonNullable<Awaited<ReturnType<typeof getPriceChart>>>
+export type GetPriceChartQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get OHLCV price history for $MAGIC
+ */
+
+export function useGetPriceChart<TData = Awaited<ReturnType<typeof getPriceChart>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPriceChart>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetPriceChartQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

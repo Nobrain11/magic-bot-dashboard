@@ -198,3 +198,17 @@ export const GetMarketStatsResponse = zod.object({
 })
 
 
+/**
+ * @summary Get OHLCV price history for $MAGIC
+ */
+export const GetPriceChartResponseItem = zod.object({
+  "time": zod.number().describe('Unix timestamp (seconds)'),
+  "open": zod.number(),
+  "high": zod.number(),
+  "low": zod.number(),
+  "close": zod.number(),
+  "volume": zod.number()
+})
+export const GetPriceChartResponse = zod.array(GetPriceChartResponseItem)
+
+

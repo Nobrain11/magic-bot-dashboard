@@ -148,4 +148,69 @@ router.get("/stats/market", async (req, res): Promise<void> => {
   });
 });
 
+// GET /stats/chart — OHLCV candles for $MAGIC via GeckoTerminal (no API key needed)
+router.get("/stats/chart", async (req, res): Promise<void> => {
+  const TOKEN_MINT_CHART = "Htg5dsESFUSRdtNQ42JCgkUx5ikH6sK54nfkWFVdpump";
+  const GT_BASE = "https://api.geckoterminal.com/api/v2";
+  const HEADERS = { Accept: "application/json;version=20230302" };
+
+  // Step 1: find the top pool for this token on Solana
+  let poolAddress: string | null = null;
+  try {
+    const r = await fetch(
+      `${GT_BASE}/networks/solana/tokens/${TOKEN_MINT_CHART}/pools?page=1`,
+      { headers: HEADERS, signal: AbortSignal.timeout(7000) }
+    );
+    if (r.ok) {
+      const d = (await r.json()) as {
+        data?: Array<{
+          id?: string;
+          attributes?: { reserve_in_usd?: string };
+        }>;
+      };
+      // pools are sorted by liquidity desc by default
+      const poolId = d?.data?.[0]?.id; // format: "solana_<address>"
+      if (poolId) {
+        poolAddress = poolId.replace(/^solana_/, "");
+      }
+    }
+  } catch (_) {}
+
+  if (!poolAddress) {
+    res.json([]);
+    return;
+  }
+
+  // Step 2: fetch 5-minute OHLCV for the last 24 hours (288 candles)
+  try {
+    const r = await fetch(
+      `${GT_BASE}/networks/solana/pools/${poolAddress}/ohlcv/minute?aggregate=5&limit=288&currency=usd`,
+      { headers: HEADERS, signal: AbortSignal.timeout(8000) }
+    );
+    if (r.ok) {
+      const d = (await r.json()) as {
+        data?: {
+          attributes?: {
+            ohlcv_list?: Array<[number, number, number, number, number, number]>;
+          };
+        };
+      };
+      const list = d?.data?.attributes?.ohlcv_list ?? [];
+      // each entry: [timestamp_seconds, open, high, low, close, volume]
+      const candles = list.map(([t, o, h, l, c, v]) => ({
+        time: t,
+        open: o,
+        high: h,
+        low: l,
+        close: c,
+        volume: v,
+      }));
+      res.json(candles);
+      return;
+    }
+  } catch (_) {}
+
+  res.json([]);
+});
+
 export default router;
