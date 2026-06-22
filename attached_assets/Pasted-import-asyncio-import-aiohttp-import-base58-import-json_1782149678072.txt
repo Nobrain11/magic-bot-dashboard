@@ -1,0 +1,670 @@
+import asyncio
+import aiohttp
+import base58
+import json
+import logging
+import random
+import time
+import os
+from typing import Optional, Dict, List, Set, Tuple
+from datetime import datetime
+from dataclasses import dataclass
+
+from solana.rpc.async_api import AsyncClient
+from solana.rpc.commitment import Confirmed
+from solana.rpc.types import TxOpts
+from solana.rpc.core import RPCException
+from solana.keypair import Keypair
+from solana.transaction import Transaction
+from solana.publickey import PublicKey
+from solders.pubkey import Pubkey
+from spl.token.instructions import get_associated_token_address
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger('RotatingWalletBot')
+
+# ==================== CONFIGURATION ====================
+class Config:
+    RPC_URL = "https://api.mainnet-beta.solana.com"
+    JUPITER_QUOTE_API = "https://quote-api.jup.ag/v6"
+    
+    TOKEN_MINT = "YOUR_TOKEN_MINT_ADDRESS"
+    WSOL_MINT = "So11111111111111111111111111111111111111112"
+    
+    WALLETS_DIR = "./wallets"
+    TOTAL_WALLETS = 40
+    
+    # Rotation settings
+    ACTIVE_BUYERS = 5       # Only 5 buying at a time
+    ACTIVE_SELLERS = 5      # Only 5 selling at a time
+    ROTATE_EVERY_N_BUYS = 3 # Rotate wallets after 3 buys each
+    
+    # Market making
+    TARGET_MC = 20000
+    INITIAL_MC = 5000
+    INTERVAL_SECONDS = 30
+    
+    # Buy amounts (SOL)
+    BUY_AMOUNTS = [0.1, 0.2, 0.29, 0.5, 1.8]
+    BUY_WEIGHTS = [0.30, 0.25, 0.20, 0.15, 0.10]
+    
+    # Sell parameters
+    SELL_PROBABILITY = 0.4
+    SELL_PORTION_MIN = 0.05
+    SELL_PORTION_MAX = 0.20
+    
+    # Slippage
+    SLIPPAGE_BPS = 500
+
+# ==================== WALLET ====================
+@dataclass
+class Wallet:
+    id: int
+    keypair: Keypair
+    role: str  # 'buyer' or 'seller'
+    sol_balance: float = 0.0
+    token_balance: float = 0.0
+    buy_count_this_rotation: int = 0
+    sell_count_this_rotation: int = 0
+    total_buys: int = 0
+    total_sells: int = 0
+    is_active: bool = False
+
+# ==================== WALLET MANAGER ====================
+class RotatingWalletManager:
+    def __init__(self):
+        self.wallets: Dict[int, Wallet] = {}
+        self.all_ids: List[int] = []
+        
+        # Current active rotation
+        self.active_buyers: List[int] = []
+        self.active_sellers: List[int] = []
+        
+        # Inactive wallets waiting to rotate in
+        self.inactive_buyers: List[int] = []
+        self.inactive_sellers: List[int] = []
+        
+        # Wallets that have been active (to avoid repeats)
+        self.recently_used: Set[int] = set()
+        
+        self.load_or_create_wallets()
+        self.initialize_first_rotation()
+    
+    def load_or_create_wallets(self):
+        """Load or create 40 wallets"""
+        os.makedirs(Config.WALLETS_DIR, exist_ok=True)
+        
+        for i in range(1, Config.TOTAL_WALLETS + 1):
+            wallet_path = f"{Config.WALLETS_DIR}/wallet_{i}.json"
+            
+            if os.path.exists(wallet_path):
+                with open(wallet_path, 'r') as f:
+                    secret_key = bytes(json.load(f))
+                keypair = Keypair.from_secret_key(secret_key)
+            else:
+                keypair = Keypair()
+                with open(wallet_path, 'w') as f:
+                    json.dump(list(keypair.secret_key), f)
+                logger.info(f"Created wallet {i}: {keypair.public_key}")
+            
+            # Split: 30 potential buyers, 10 potential sellers
+            role = 'buyer' if i <= 30 else 'seller'
+            
+            wallet = Wallet(id=i, keypair=keypair, role=role)
+            self.wallets[i] = wallet
+            self.all_ids.append(i)
+        
+        # Initialize inactive pools
+        self.inactive_buyers = [i for i in range(1, 31)]   # 30 buyers
+        self.inactive_sellers = [i for i in range(31, 41)]  # 10 sellers
+        
+        random.shuffle(self.inactive_buyers)
+        random.shuffle(self.inactive_sellers)
+        
+        logger.info(f"Loaded {len(self.wallets)} wallets")
+        logger.info(f"Buyer pool: {len(self.inactive_buyers)} | Seller pool: {len(self.inactive_sellers)}")
+    
+    def initialize_first_rotation(self):
+        """Pick first 5 buyers and 5 sellers"""
+        self._rotate_buyers()
+        self._rotate_sellers()
+        logger.info(f"Initial active buyers: {self.active_buyers}")
+        logger.info(f"Initial active sellers: {self.active_sellers}")
+    
+    def _rotate_buyers(self):
+        """Deactivate current buyers, activate 5 new ones"""
+        # Mark current as inactive
+        for wid in self.active_buyers:
+            wallet = self.wallets[wid]
+            wallet.is_active = False
+            wallet.buy_count_this_rotation = 0
+            self.recently_used.add(wid)
+        
+        self.active_buyers.clear()
+        
+        # Pick 5 new buyers from inactive pool
+        new_buyers = []
+        available = [w for w in self.inactive_buyers if w not in self.recently_used]
+        
+        # If not enough fresh wallets, clear recently_used
+        if len(available) < Config.ACTIVE_BUYERS:
+            self.recently_used.clear()
+            available = self.inactive_buyers.copy()
+        
+        # Pick 5 random
+        random.shuffle(available)
+        new_buyers = available[:Config.ACTIVE_BUYERS]
+        
+        # Update
+        for wid in new_buyers:
+            wallet = self.wallets[wid]
+            wallet.is_active = True
+            wallet.buy_count_this_rotation = 0
+            self.active_buyers.append(wid)
+            self.inactive_buyers.remove(wid)
+        
+        # Return old buyers to inactive pool
+        for wid in self.recently_used:
+            if wid not in self.inactive_buyers and wid not in self.active_buyers:
+                wallet = self.wallets[wid]
+                if wallet.role == 'buyer':
+                    self.inactive_buyers.append(wid)
+        
+        logger.info(f"🔄 ROTATED BUYERS → Active: {self.active_buyers}")
+    
+    def _rotate_sellers(self):
+        """Deactivate current sellers, activate 5 new ones"""
+        for wid in self.active_sellers:
+            wallet = self.wallets[wid]
+            wallet.is_active = False
+            wallet.sell_count_this_rotation = 0
+        
+        self.active_sellers.clear()
+        
+        # Pick 5 from seller pool
+        available = self.inactive_sellers.copy()
+        random.shuffle(available)
+        new_sellers = available[:Config.ACTIVE_SELLERS]
+        
+        for wid in new_sellers:
+            wallet = self.wallets[wid]
+            wallet.is_active = True
+            wallet.sell_count_this_rotation = 0
+            self.active_sellers.append(wid)
+            self.inactive_sellers.remove(wid)
+        
+        logger.info(f"🔄 ROTATED SELLERS → Active: {self.active_sellers}")
+    
+    def get_random_active_buyer(self) -> Optional[Wallet]:
+        """Get random wallet from active buyers"""
+        if not self.active_buyers:
+            return None
+        
+        # Check if rotation needed
+        self._check_buyer_rotation()
+        
+        wid = random.choice(self.active_buyers)
+        wallet = self.wallets[wid]
+        wallet.buy_count_this_rotation += 1
+        wallet.total_buys += 1
+        
+        return wallet
+    
+    def get_random_active_seller(self) -> Optional[Wallet]:
+        """Get random wallet from active sellers"""
+        if not self.active_sellers:
+            return None
+        
+        self._check_seller_rotation()
+        
+        wid = random.choice(self.active_sellers)
+        wallet = self.wallets[wid]
+        wallet.sell_count_this_rotation += 1
+        wallet.total_sells += 1
+        
+        return wallet
+    
+    def _check_buyer_rotation(self):
+        """Check if active buyers need rotation"""
+        # If all active buyers have done 3+ buys, rotate
+        all_done = all(
+            self.wallets[w].buy_count_this_rotation >= Config.ROTATE_EVERY_N_BUYS
+            for w in self.active_buyers
+        )
+        if all_done:
+            self._rotate_buyers()
+    
+    def _check_seller_rotation(self):
+        """Check if active sellers need rotation"""
+        all_done = all(
+            self.wallets[w].sell_count_this_rotation >= Config.ROTATE_EVERY_N_BUYS
+            for w in self.active_sellers
+        )
+        if all_done:
+            self._rotate_sellers()
+    
+    def get_token_account(self, wallet: Wallet, mint: str) -> str:
+        mint_pubkey = Pubkey.from_string(mint)
+        wallet_pubkey = Pubkey.from_string(str(wallet.keypair.public_key))
+        return str(get_associated_token_address(wallet_pubkey, mint_pubkey))
+    
+    def get_active_summary(self) -> str:
+        return (f"Active: {len(self.active_buyers)} buyers, "
+                f"{len(self.active_sellers)} sellers | "
+                f"Inactive pool: {len(self.inactive_buyers)} buyers, "
+                f"{len(self.inactive_sellers)} sellers")
+
+# ==================== BALANCE CHECKER ====================
+class BalanceChecker:
+    def __init__(self):
+        pass
+    
+    async def get_sol_balance(self, wallet: Wallet) -> float:
+        client = AsyncClient(Config.RPC_URL)
+        try:
+            resp = await client.get_balance(
+                Pubkey.from_string(str(wallet.keypair.public_key))
+            )
+            return resp['result']['value'] / 1e9
+        except:
+            return 0.0
+        finally:
+            await client.close()
+    
+    async def get_token_balance(self, wallet: Wallet, mint: str) -> float:
+        client = AsyncClient(Config.RPC_URL)
+        try:
+            token_account = self._get_token_account_static(wallet, mint)
+            resp = await client.get_token_account_balance(
+                Pubkey.from_string(token_account)
+            )
+            return float(resp['result']['value']['uiAmount'] or 0)
+        except:
+            return 0.0
+        finally:
+            await client.close()
+    
+    def _get_token_account_static(self, wallet: Wallet, mint: str) -> str:
+        mint_pubkey = Pubkey.from_string(mint)
+        wallet_pubkey = Pubkey.from_string(str(wallet.keypair.public_key))
+        return str(get_associated_token_address(wallet_pubkey, mint_pubkey))
+    
+    async def update_wallet_balances(self, wallet: Wallet):
+        wallet.sol_balance = await self.get_sol_balance(wallet)
+        wallet.token_balance = await self.get_token_balance(wallet, Config.TOKEN_MINT)
+
+# ==================== JUPITER SWAPPER ====================
+class JupiterSwapper:
+    def __init__(self):
+        self.session = None
+    
+    async def _get_session(self):
+        if self.session is None:
+            self.session = aiohttp.ClientSession()
+        return self.session
+    
+    async def execute_buy(self, wallet: Wallet, sol_amount: float) -> Optional[str]:
+        logger.info(f"🟢 Wallet {wallet.id} BUY {sol_amount} SOL")
+        
+        session = await self._get_session()
+        amount_lamports = int(sol_amount * 1e9)
+        
+        quote_params = {
+            "inputMint": Config.WSOL_MINT,
+            "outputMint": Config.TOKEN_MINT,
+            "amount": amount_lamports,
+            "slippageBps": Config.SLIPPAGE_BPS,
+        }
+        
+        try:
+            async with session.get(f"{Config.JUPITER_QUOTE_API}/quote",
+                                  params=quote_params) as resp:
+                if resp.status != 200:
+                    return None
+                quote = await resp.json()
+            
+            token_account = self._get_token_account(wallet)
+            
+            swap_payload = {
+                "quoteResponse": quote,
+                "userPublicKey": str(wallet.keypair.public_key),
+                "destinationTokenAccount": token_account,
+                "wrapAndUnwrapSol": True,
+                "dynamicComputeUnitLimit": True,
+                "prioritizationFeeLamports": 100_000,
+            }
+            
+            async with session.post(f"{Config.JUPITER_QUOTE_API}/swap",
+                                   json=swap_payload) as resp:
+                if resp.status != 200:
+                    return None
+                swap_data = await resp.json()
+            
+            tx_bytes = base58.b58decode(swap_data['swapTransaction'])
+            transaction = Transaction.deserialize(tx_bytes)
+            transaction.sign(wallet.keypair)
+            
+            return await self._send_tx(transaction, wallet)
+            
+        except Exception as e:
+            logger.error(f"Buy error wallet {wallet.id}: {e}")
+            return None
+    
+    async def execute_sell(self, wallet: Wallet, token_percentage: float) -> Optional[str]:
+        logger.info(f"🔴 Wallet {wallet.id} SELL {token_percentage*100:.0f}%")
+        
+        session = await self._get_session()
+        client = AsyncClient(Config.RPC_URL)
+        
+        try:
+            token_account = self._get_token_account(wallet)
+            balance_resp = await client.get_token_account_balance(
+                Pubkey.from_string(token_account)
+            )
+            await client.close()
+            
+            token_amount = int(float(balance_resp['result']['value']['amount']))
+            sell_amount = int(token_amount * token_percentage)
+            
+            if sell_amount <= 0:
+                return None
+            
+            quote_params = {
+                "inputMint": Config.TOKEN_MINT,
+                "outputMint": Config.WSOL_MINT,
+                "amount": sell_amount,
+                "slippageBps": Config.SLIPPAGE_BPS,
+            }
+            
+            async with session.get(f"{Config.JUPITER_QUOTE_API}/quote",
+                                  params=quote_params) as resp:
+                if resp.status != 200:
+                    return None
+                quote = await resp.json()
+            
+            swap_payload = {
+                "quoteResponse": quote,
+                "userPublicKey": str(wallet.keypair.public_key),
+                "wrapAndUnwrapSol": True,
+                "dynamicComputeUnitLimit": True,
+                "prioritizationFeeLamports": 100_000,
+            }
+            
+            async with session.post(f"{Config.JUPITER_QUOTE_API}/swap",
+                                   json=swap_payload) as resp:
+                if resp.status != 200:
+                    return None
+                swap_data = await resp.json()
+            
+            tx_bytes = base58.b58decode(swap_data['swapTransaction'])
+            transaction = Transaction.deserialize(tx_bytes)
+            transaction.sign(wallet.keypair)
+            
+            return await self._send_tx(transaction, wallet)
+            
+        except Exception as e:
+            logger.error(f"Sell error wallet {wallet.id}: {e}")
+            return None
+    
+    def _get_token_account(self, wallet: Wallet) -> str:
+        mint_pubkey = Pubkey.from_string(Config.TOKEN_MINT)
+        wallet_pubkey = Pubkey.from_string(str(wallet.keypair.public_key))
+        return str(get_associated_token_address(wallet_pubkey, mint_pubkey))
+    
+    async def _send_tx(self, transaction: Transaction, wallet: Wallet) -> Optional[str]:
+        client = AsyncClient(Config.RPC_URL)
+        try:
+            opts = TxOpts(
+                skip_preflight=False,
+                preflight_commitment=Confirmed,
+                max_retries=3
+            )
+            result = await client.send_transaction(
+                transaction, wallet.keypair, opts=opts
+            )
+            signature = result['result']
+            logger.info(f"✅ TX: {signature[:16]}... | Wallet {wallet.id}")
+            
+            await self._confirm_tx(client, signature)
+            return signature
+            
+        except RPCException as e:
+            logger.error(f"TX error wallet {wallet.id}: {e}")
+            return None
+        finally:
+            await client.close()
+    
+    async def _confirm_tx(self, client, signature: str, timeout: int = 30):
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                result = await client.get_signature_statuses([signature])
+                if result['result']['value'][0] is not None:
+                    status = result['result']['value'][0]
+                    if status.get('confirmationStatus') in ['confirmed', 'finalized']:
+                        return
+            except:
+                pass
+            await asyncio.sleep(1)
+
+# ==================== DECISION ENGINE ====================
+class DecisionEngine:
+    def __init__(self):
+        self.buy_amounts = Config.BUY_AMOUNTS
+        self.buy_weights = Config.BUY_WEIGHTS
+        self.total_actions = 0
+        self.total_buys = 0
+        self.total_sells = 0
+    
+    def should_sell(self) -> bool:
+        return random.random() < Config.SELL_PROBABILITY
+    
+    def get_random_buy_amount(self, max_sol: float) -> float:
+        amount = random.choices(self.buy_amounts, weights=self.buy_weights, k=1)[0]
+        max_allowed = max_sol - 0.002
+        if amount > max_allowed:
+            amount = max(0.05, max_allowed)
+        return round(amount, 2)
+    
+    def get_random_sell_percentage(self) -> float:
+        return random.uniform(Config.SELL_PORTION_MIN, Config.SELL_PORTION_MAX)
+    
+    def record_action(self, action: str):
+        self.total_actions += 1
+        if action == 'BUY':
+            self.total_buys += 1
+        else:
+            self.total_sells += 1
+
+# ==================== MARKET DATA ====================
+class MarketData:
+    def __init__(self):
+        self.session = None
+    
+    async def _get_session(self):
+        if self.session is None:
+            self.session = aiohttp.ClientSession()
+        return self.session
+    
+    async def get_market_cap(self) -> Optional[float]:
+        session = await self._get_session()
+        try:
+            url = f"{Config.JUPITER_QUOTE_API}/quote"
+            params = {
+                "inputMint": Config.WSOL_MINT,
+                "outputMint": Config.TOKEN_MINT,
+                "amount": int(0.1 * 1e9),
+                "slippageBps": 50
+            }
+            async with session.get(url, params=params) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if 'outAmount' in data:
+                        tokens = int(data['outAmount']) / 1e6
+                        if tokens > 0:
+                            sol_price = 0.1 / tokens
+                            sol_usd = await self._get_sol_usd()
+                            return sol_price * sol_usd * 1_000_000
+        except:
+            pass
+        return Config.INITIAL_MC
+    
+    async def _get_sol_usd(self) -> float:
+        session = await self._get_session()
+        try:
+            url = "https://price.jup.ag/v4/price?ids=SOL"
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return float(data['data']['SOL']['price'])
+        except:
+            pass
+        return 150.0
+
+# ==================== MAIN BOT ====================
+class RotatingMMBot:
+    def __init__(self):
+        self.wallet_manager = RotatingWalletManager()
+        self.balance_checker = BalanceChecker()
+        self.swapper = JupiterSwapper()
+        self.market = MarketData()
+        self.decision = DecisionEngine()
+        self.running = True
+        
+        self.start_time = time.time()
+        self.transaction_log = []
+    
+    async def run(self):
+        logger.info("=" * 60)
+        logger.info("🤖 ROTATING WALLET MARKET MAKER")
+        logger.info("=" * 60)
+        logger.info(f"Total wallets: {Config.TOTAL_WALLETS}")
+        logger.info(f"Active at once: {Config.ACTIVE_BUYERS} buyers + "
+                   f"{Config.ACTIVE_SELLERS} sellers")
+        logger.info(f"Rotation after: {Config.ROTATE_EVERY_N_BUYS} buys/sells each")
+        logger.info(f"Target MC: ${Config.TARGET_MC:,}")
+        logger.info(f"Interval: {Config.INTERVAL_SECONDS}s")
+        logger.info("=" * 60)
+        
+        while self.running:
+            try:
+                mc = await self.market.get_market_cap()
+                
+                if mc and mc >= Config.TARGET_MC:
+                    logger.info(f"🎯 TARGET REACHED! MC: ${mc:,.0f}")
+                    await self.print_summary()
+                    break
+                
+                logger.info(f"\n📊 MC: ${mc:,.0f} | {self.wallet_manager.get_active_summary()}")
+                
+                # Decide action
+                if self.decision.should_sell():
+                    await self._do_sell(mc)
+                else:
+                    await self._do_buy(mc)
+                
+                logger.info(f"Stats: {self.decision.total_actions} actions "
+                          f"({self.decision.total_buys}B/{self.decision.total_sells}S)")
+                
+                await asyncio.sleep(Config.INTERVAL_SECONDS)
+                
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                logger.error(f"Loop error: {e}")
+                await asyncio.sleep(Config.INTERVAL_SECONDS)
+        
+        await self.print_summary()
+    
+    async def _do_buy(self, mc: float):
+        wallet = self.wallet_manager.get_random_active_buyer()
+        if wallet is None:
+            logger.info("No active buyers available")
+            return
+        
+        await self.balance_checker.update_wallet_balances(wallet)
+        
+        if wallet.sol_balance < 0.05:
+            logger.info(f"Wallet {wallet.id} low SOL: {wallet.sol_balance:.3f}")
+            return
+        
+        amount = self.decision.get_random_buy_amount(wallet.sol_balance)
+        if amount < 0.05:
+            return
+        
+        logger.info(f"👤 Buyer Wallet {wallet.id} | Buys this rotation: "
+                   f"{wallet.buy_count_this_rotation}")
+        
+        signature = await self.swapper.execute_buy(wallet, amount)
+        
+        if signature:
+            self.decision.record_action('BUY')
+            self.transaction_log.append({
+                'time': datetime.now().isoformat(),
+                'wallet': wallet.id,
+                'role': 'buyer',
+                'action': 'BUY',
+                'amount': amount,
+                'mc': mc,
+                'tx': signature
+            })
+    
+    async def _do_sell(self, mc: float):
+        wallet = self.wallet_manager.get_random_active_seller()
+        if wallet is None:
+            logger.info("No active sellers available")
+            return
+        
+        await self.balance_checker.update_wallet_balances(wallet)
+        
+        if wallet.token_balance <= 0:
+            logger.info(f"Wallet {wallet.id} has no tokens")
+            return
+        
+        percentage = self.decision.get_random_sell_percentage()
+        
+        logger.info(f"👤 Seller Wallet {wallet.id} | Sells this rotation: "
+                   f"{wallet.sell_count_this_rotation}")
+        
+        signature = await self.swapper.execute_sell(wallet, percentage)
+        
+        if signature:
+            self.decision.record_action('SELL')
+            self.transaction_log.append({
+                'time': datetime.now().isoformat(),
+                'wallet': wallet.id,
+                'role': 'seller',
+                'action': 'SELL',
+                'percentage': percentage,
+                'mc': mc,
+                'tx': signature
+            })
+    
+    async def print_summary(self):
+        elapsed = time.time() - self.start_time
+        minutes = int(elapsed / 60)
+        
+        total_buys = sum(w.total_buys for w in self.wallet_manager.wallets.values())
+        total_sells = sum(w.total_sells for w in self.wallet_manager.wallets.values())
+        used_wallets = sum(1 for w in self.wallet_manager.wallets.values() 
+                          if w.total_buys > 0 or w.total_sells > 0)
+        
+        print("\n" + "=" * 60)
+        print("📊 FINAL SUMMARY - ROTATING WALLETS")
+        print("=" * 60)
+        print(f"Time: {minutes} min | Actions: {self.decision.total_actions}")
+        print(f"Buys: {total_buys} | Sells: {total_sells}")
+        print(f"Wallets used: {used_wallets}/{Config.TOTAL_WALLETS}")
+        print(f"Transactions: {len(self.transaction_log)}")
+        print("=" * 60)
+
+# ==================== RUN ====================
+if __name__ == "__main__":
+    bot = RotatingMMBot()
+    try:
+        asyncio.run(bot.run())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
