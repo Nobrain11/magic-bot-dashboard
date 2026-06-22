@@ -150,11 +150,11 @@ router.post("/bot/start", async (req, res): Promise<void> => {
         } catch (_) {}
       });
     } else {
-      // Simulate bot running (no Python installed / script missing)
-      logger.warn({ botScript }, "Bot script not found — running in simulated mode");
-      await appendLog("WARN", `Bot script not found at ${botScript} — running in simulated mode`);
-      await appendLog("INFO", "Simulated bot started. Configure token mint and fund wallets to run the real bot.");
-      proc = null as unknown as ChildProcess;
+      logger.warn({ botScript }, "Bot script not found at expected path");
+      await appendLog("WARN", `Bot script not found at ${botScript}`);
+      await appendLog("ERROR", "Cannot start bot: magic_bot.py not found. Ensure the bot/ directory is present and Python dependencies are installed (aiohttp, base58, solana-py, solders, spl-token).");
+      res.status(500).json({ error: "Bot script not found. Ensure bot/magic_bot.py exists and Python deps are installed." });
+      return;
     }
   } catch (err) {
     logger.error({ err }, "Failed to spawn bot process");

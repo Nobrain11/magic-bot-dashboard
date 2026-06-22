@@ -6,9 +6,11 @@ import {
   walletsTable,
   transactionsTable,
 } from "@workspace/db";
-import { sql } from "drizzle-orm";
 
 const router: IRouter = Router();
+
+const TOKEN_MINT = "Htg5dsESFUSRdtNQ42JCgkUx5ikH6sK54nfkWFVdpump";
+const WSOL_MINT = "So11111111111111111111111111111111111111112";
 
 async function ensureState() {
   const existing = await db.select().from(botStateTable).limit(1);
@@ -63,45 +65,80 @@ router.get("/stats/summary", async (req, res): Promise<void> => {
   });
 });
 
-// GET /stats/market
+// GET /stats/market — live price from DexScreener (mainnet)
 router.get("/stats/market", async (req, res): Promise<void> => {
-  const config = await ensureConfig();
+  let marketCap = 0;
+  let solPrice = 0;
+  let tokenPrice = 0;
 
-  // Try to get live market data from Jupiter
-  let marketCap = config.initialMc;
-  let solPrice = 150.0;
-  let tokenPrice = 0.0;
+  // Fetch SOL price and $MAGIC price concurrently
+  await Promise.all([
+    // SOL price from CoinGecko (public, no key needed)
+    (async () => {
+      try {
+        const r = await fetch(
+          "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd",
+          { signal: AbortSignal.timeout(5000) }
+        );
+        if (r.ok) {
+          const d = (await r.json()) as { solana?: { usd?: number } };
+          solPrice = d?.solana?.usd ?? 0;
+        }
+      } catch (_) {}
+    })(),
 
-  try {
-    const solPriceRes = await fetch("https://price.jup.ag/v4/price?ids=SOL");
-    if (solPriceRes.ok) {
-      const data = (await solPriceRes.json()) as {
-        data?: { SOL?: { price?: number } };
-      };
-      solPrice = data?.data?.SOL?.price ?? 150.0;
-    }
-  } catch (_) {}
+    // $MAGIC price & market cap from DexScreener
+    (async () => {
+      try {
+        const r = await fetch(
+          `https://api.dexscreener.com/latest/dex/tokens/${TOKEN_MINT}`,
+          { signal: AbortSignal.timeout(6000) }
+        );
+        if (r.ok) {
+          const d = (await r.json()) as {
+            pairs?: Array<{
+              priceUsd?: string;
+              fdv?: number;
+              marketCap?: number;
+              chainId?: string;
+              dexId?: string;
+              liquidity?: { usd?: number };
+            }>;
+          };
+          // Pick the Solana pair with most liquidity
+          const pairs = (d?.pairs ?? [])
+            .filter((p) => p.chainId === "solana")
+            .sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0));
 
-  try {
-    if (
-      config.tokenMint &&
-      config.tokenMint !== "YOUR_TOKEN_MINT_ADDRESS"
-    ) {
-      const quoteRes = await fetch(
-        `https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${config.tokenMint}&amount=100000000&slippageBps=50`
+          if (pairs.length > 0) {
+            const best = pairs[0];
+            tokenPrice = parseFloat(best.priceUsd ?? "0") || 0;
+            marketCap = best.marketCap ?? best.fdv ?? 0;
+          }
+        }
+      } catch (_) {}
+    })(),
+  ]);
+
+  // Fallback: derive from Jupiter quote if DexScreener returned nothing
+  if (tokenPrice === 0) {
+    try {
+      const r = await fetch(
+        `https://quote-api.jup.ag/v6/quote?inputMint=${WSOL_MINT}&outputMint=${TOKEN_MINT}&amount=100000000&slippageBps=100`,
+        { signal: AbortSignal.timeout(6000) }
       );
-      if (quoteRes.ok) {
-        const q = (await quoteRes.json()) as { outAmount?: string };
+      if (r.ok) {
+        const q = (await r.json()) as { outAmount?: string };
         if (q.outAmount) {
-          const tokens = parseInt(q.outAmount, 10) / 1e6;
-          if (tokens > 0) {
+          const tokens = parseInt(q.outAmount, 10) / 1_000_000;
+          if (tokens > 0 && solPrice > 0) {
             tokenPrice = (0.1 / tokens) * solPrice;
             marketCap = tokenPrice * 1_000_000_000;
           }
         }
       }
-    }
-  } catch (_) {}
+    } catch (_) {}
+  }
 
   res.json({
     marketCap,
