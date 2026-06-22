@@ -115,10 +115,16 @@ router.post("/bot/start", async (req, res): Promise<void> => {
   let proc: ChildProcess | null = null;
   try {
     if (fs.existsSync(botScript)) {
+      const currentConfig = await ensureConfig();
       proc = spawn("python3", [botScript], {
         cwd: path.resolve(workspaceRoot, "bot"),
         detached: false,
         stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          BOT_STRATEGY: currentConfig.strategyMode ?? "balanced",
+          API_BASE_URL: `http://localhost:${process.env.PORT ?? 8080}/api`,
+        },
       });
 
       botProcess = proc;
@@ -222,6 +228,7 @@ router.get("/bot/config", async (req, res): Promise<void> => {
     intervalSeconds: config.intervalSeconds,
     sellProbability: config.sellProbability,
     slippageBps: config.slippageBps,
+    strategyMode: config.strategyMode,
   });
 });
 
@@ -252,6 +259,7 @@ router.patch("/bot/config", async (req, res): Promise<void> => {
     intervalSeconds: updated.intervalSeconds,
     sellProbability: updated.sellProbability,
     slippageBps: updated.slippageBps,
+    strategyMode: updated.strategyMode,
   });
 });
 

@@ -1,11 +1,16 @@
 import React from "react";
-import { useListWallets, useGetActiveWallets } from "@workspace/api-client-react";
+import {
+  useListWallets,
+  useGetActiveWallets,
+  getListWalletsQueryKey,
+  getGetActiveWalletsQueryKey,
+} from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
 export default function Wallets() {
-  const { data: wallets, isLoading } = useListWallets({ query: { refetchInterval: 10000 } });
-  const { data: activeWallets } = useGetActiveWallets({ query: { refetchInterval: 10000 } });
+  const { data: wallets, isLoading } = useListWallets({ query: { queryKey: getListWalletsQueryKey(), refetchInterval: 10000 } });
+  const { data: activeWallets } = useGetActiveWallets({ query: { queryKey: getGetActiveWalletsQueryKey(), refetchInterval: 10000 } });
 
   const isActiveWallet = (id: number, role: string) => {
     if (!activeWallets) return false;

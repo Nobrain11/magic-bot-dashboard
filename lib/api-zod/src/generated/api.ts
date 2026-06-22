@@ -42,7 +42,8 @@ export const StartBotBody = zod.object({
   "initialMc": zod.number().optional(),
   "intervalSeconds": zod.number().optional(),
   "sellProbability": zod.number().optional(),
-  "slippageBps": zod.number().optional()
+  "slippageBps": zod.number().optional(),
+  "strategyMode": zod.string().optional().describe('moon | balanced | stealth')
 })
 
 export const StartBotResponse = zod.object({
@@ -80,7 +81,8 @@ export const GetBotConfigResponse = zod.object({
   "initialMc": zod.number(),
   "intervalSeconds": zod.number(),
   "sellProbability": zod.number(),
-  "slippageBps": zod.number()
+  "slippageBps": zod.number(),
+  "strategyMode": zod.string().describe('moon | balanced | stealth')
 })
 
 
@@ -98,7 +100,8 @@ export const UpdateBotConfigBody = zod.object({
   "initialMc": zod.number().optional(),
   "intervalSeconds": zod.number().optional(),
   "sellProbability": zod.number().optional(),
-  "slippageBps": zod.number().optional()
+  "slippageBps": zod.number().optional(),
+  "strategyMode": zod.string().optional().describe('moon | balanced | stealth')
 })
 
 export const UpdateBotConfigResponse = zod.object({
@@ -112,7 +115,8 @@ export const UpdateBotConfigResponse = zod.object({
   "initialMc": zod.number(),
   "intervalSeconds": zod.number(),
   "sellProbability": zod.number(),
-  "slippageBps": zod.number()
+  "slippageBps": zod.number(),
+  "strategyMode": zod.string().describe('moon | balanced | stealth')
 })
 
 

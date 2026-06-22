@@ -18,4 +18,6 @@ export interface BotConfig {
   intervalSeconds: number;
   sellProbability: number;
   slippageBps: number;
+  /** moon | balanced | stealth */
+  strategyMode: string;
 }

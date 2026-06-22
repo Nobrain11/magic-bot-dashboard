@@ -15,6 +15,7 @@ export const botConfigTable = pgTable("bot_config", {
   intervalSeconds: integer("interval_seconds").notNull().default(30),
   sellProbability: real("sell_probability").notNull().default(0.4),
   slippageBps: integer("slippage_bps").notNull().default(500),
+  strategyMode: text("strategy_mode").notNull().default("balanced"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });
 

@@ -6,6 +6,12 @@ import {
   useListTransactions,
   useGetActiveWallets,
   useGetPriceChart,
+  getGetBotStatusQueryKey,
+  getGetStatsSummaryQueryKey,
+  getGetMarketStatsQueryKey,
+  getListTransactionsQueryKey,
+  getGetActiveWalletsQueryKey,
+  getGetPriceChartQueryKey,
 } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -22,7 +28,7 @@ import {
 
 function PriceChart() {
   const { data: candles, isLoading } = useGetPriceChart({
-    query: { refetchInterval: 30000 },
+    query: { queryKey: getGetPriceChartQueryKey(), refetchInterval: 30000 },
   });
 
   const chartData = useMemo(() => {
@@ -184,11 +190,11 @@ function ChartTooltipContent({ active, payload, label }: any) {
 }
 
 export default function Dashboard() {
-  const { data: status } = useGetBotStatus({ query: { refetchInterval: 5000 } });
-  const { data: stats } = useGetStatsSummary({ query: { refetchInterval: 5000 } });
-  const { data: market } = useGetMarketStats({ query: { refetchInterval: 5000 } });
-  const { data: transactions } = useListTransactions({ query: { refetchInterval: 10000 } });
-  const { data: activeWallets } = useGetActiveWallets({ query: { refetchInterval: 10000 } });
+  const { data: status } = useGetBotStatus({ query: { queryKey: getGetBotStatusQueryKey(), refetchInterval: 5000 } });
+  const { data: stats } = useGetStatsSummary({ query: { queryKey: getGetStatsSummaryQueryKey(), refetchInterval: 5000 } });
+  const { data: market } = useGetMarketStats({ query: { queryKey: getGetMarketStatsQueryKey(), refetchInterval: 5000 } });
+  const { data: transactions } = useListTransactions({ query: { queryKey: getListTransactionsQueryKey(), refetchInterval: 10000 } });
+  const { data: activeWallets } = useGetActiveWallets({ query: { queryKey: getGetActiveWalletsQueryKey(), refetchInterval: 10000 } });
 
   const progress =
     stats && stats.targetMc > 0
