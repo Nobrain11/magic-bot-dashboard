@@ -48,8 +48,8 @@ if (process.env.NODE_ENV === "production") {
     logger.info({ staticDir }, "Serving frontend static files");
     app.use(express.static(staticDir));
 
-    // SPA fallback — serve index.html for any non-API route
-    app.get("*", (_req: Request, res: Response) => {
+    // SPA fallback — serve index.html for any non-API route (Express 5 named wildcard)
+    app.get("/{*any}", (_req: Request, res: Response) => {
       res.sendFile(path.join(staticDir, "index.html"));
     });
   } else {
