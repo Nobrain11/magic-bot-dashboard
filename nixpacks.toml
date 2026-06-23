@@ -2,7 +2,7 @@
 nixPkgs = ["nodejs_22", "pnpm", "python312", "python312Packages.pip"]
 
 [phases.install]
-cmds = ["pnpm install --frozen-lockfile"]
+cmds = ["pnpm install --no-frozen-lockfile"]
 
 [phases.build]
 cmds = [
