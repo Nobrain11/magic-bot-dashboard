@@ -129,6 +129,19 @@ router.post("/bot/start", async (req, res): Promise<void> => {
 
       botProcess = proc;
 
+      proc.on("error", async (err: NodeJS.ErrnoException) => {
+        logger.error({ err }, "Bot process error");
+        botProcess = null;
+        const msg = err.code === "ENOENT"
+          ? "python3 not found. Install Python 3 and ensure it is in PATH."
+          : `Bot process error: ${err.message}`;
+        await appendLog("ERROR", msg);
+        try {
+          const s = await ensureState();
+          await db.update(botStateTable).set({ running: false, pid: null }).where(eq(botStateTable.id, s.id));
+        } catch (_) {}
+      });
+
       proc.stdout?.on("data", async (data: Buffer) => {
         const lines = data.toString().split("\n").filter(Boolean);
         for (const line of lines) {
